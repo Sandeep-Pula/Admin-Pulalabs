@@ -1,11 +1,12 @@
 export const ADMIN_HOST = 'admin.pulalabs.com';
 export const MAIN_HOST = 'pulalabs.com';
 export const SUPER_ADMIN_DASHBOARD_HASH = '#dashboard/super-admin';
+export const IS_ADMIN_PORTAL_BUILD = import.meta.env.VITE_ADMIN_PORTAL === 'true';
 
 export const isSuperAdminEmail = (email?: string | null) =>
   email?.trim().toLowerCase() === 'superadmin@pulalabs.com';
 
-export const isAdminHost = () => window.location.hostname === ADMIN_HOST;
+export const isAdminHost = () => IS_ADMIN_PORTAL_BUILD || window.location.hostname === ADMIN_HOST;
 
 export const getAdminDashboardUrl = () => {
   const adminOrigin = `https://${ADMIN_HOST}`;

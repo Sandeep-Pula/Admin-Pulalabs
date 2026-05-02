@@ -6,6 +6,7 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  VITE_ADMIN_PORTAL: true
 
 permissions:
   contents: read
@@ -72,6 +73,7 @@ jobs:
             echo "VITE_FIREBASE_MESSAGING_SENDER_ID=${VITE_FIREBASE_MESSAGING_SENDER_ID}"
             echo "VITE_FIREBASE_APP_ID=${VITE_FIREBASE_APP_ID}"
             echo "VITE_FIREBASE_MEASUREMENT_ID=${VITE_FIREBASE_MEASUREMENT_ID}"
+            echo "VITE_ADMIN_PORTAL=true"
           } > .env.production
 
       - name: Build
@@ -84,6 +86,7 @@ jobs:
           VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID || vars.VITE_FIREBASE_MESSAGING_SENDER_ID }}
           VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID || vars.VITE_FIREBASE_APP_ID }}
           VITE_FIREBASE_MEASUREMENT_ID: ${{ secrets.VITE_FIREBASE_MEASUREMENT_ID || vars.VITE_FIREBASE_MEASUREMENT_ID }}
+          VITE_ADMIN_PORTAL: true
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
