@@ -1,0 +1,249 @@
+.section {
+  min-height: 100vh;
+  padding: 7.5rem 0 3rem;
+}
+
+.container {
+  width: min(1180px, calc(100vw - 1.25rem));
+  margin: 0 auto;
+}
+
+.backRow {
+  margin-bottom: 1rem;
+}
+
+.backLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--color-body);
+  font-weight: 600;
+}
+
+.panel {
+  display: grid;
+  grid-template-columns: 1fr 440px;
+  gap: 1.2rem;
+  align-items: stretch;
+}
+
+.copyColumn,
+.formCard {
+  border-radius: 28px;
+  border: 1px solid rgba(80, 80, 129, 0.12);
+  box-shadow: var(--shadow-soft);
+}
+
+.copyColumn {
+  padding: 2rem;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.9) 0%, rgba(236, 235, 246, 0.92) 100%);
+}
+
+.eyebrow {
+  display: inline-flex;
+  padding: 0.45rem 0.85rem;
+  border-radius: 999px;
+  background: rgba(80, 80, 129, 0.1);
+  border: 1px solid rgba(80, 80, 129, 0.12);
+  color: var(--color-brand-dark);
+  font-size: 0.82rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.title {
+  margin-top: 1rem;
+  color: var(--color-brand-dark);
+  font-size: clamp(2.2rem, 5vw, 4rem);
+  line-height: 1.03;
+  letter-spacing: -0.05em;
+}
+
+.subtitle {
+  margin-top: 1rem;
+  color: var(--color-brand-dark);
+  max-width: 34rem;
+  opacity: 0.8;
+}
+
+.benefits {
+  display: grid;
+  gap: 0.9rem;
+  margin-top: 2rem;
+}
+
+.benefitItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.7rem;
+  color: var(--color-brand-dark);
+}
+
+.formColumn {
+  display: flex;
+}
+
+.formCard {
+  width: 100%;
+  padding: 1.6rem;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.formHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.formTitle {
+  color: var(--color-brand-dark);
+  font-size: 1.8rem;
+  flex-shrink: 0;
+}
+
+.authProductLogo {
+  width: min(13rem, 48%);
+  height: auto;
+  object-fit: contain;
+  display: block;
+}
+
+.formText {
+  margin-top: 0.55rem;
+  color: var(--color-brand-dark);
+  opacity: 0.8;
+}
+
+.messageError,
+.messageSuccess {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  margin-bottom: -0.25rem;
+  font-size: 0.875rem;
+}
+
+.messageError {
+  color: #c62828;
+}
+
+.messageSuccess {
+  color: #1b7f47;
+}
+
+.form {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+
+.field {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.field span {
+  color: var(--color-brand-dark);
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.field input {
+  min-height: 3rem;
+  padding: 0.85rem 0.95rem;
+  border-radius: 14px;
+  border: 1px solid rgba(80, 80, 129, 0.14);
+  background: var(--color-brand-60-soft);
+  color: var(--color-brand-dark);
+  font: inherit;
+}
+
+.submitButton {
+  min-height: 3.2rem;
+  border-radius: 16px;
+  background: linear-gradient(135deg, var(--color-brand-10) 0%, var(--color-brand-10-soft) 100%);
+  color: #f4f3fb;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 16px 28px rgba(15, 14, 71, 0.18);
+}
+
+.submitButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+  box-shadow: none;
+}
+
+.helperText {
+  margin-top: -0.25rem;
+  font-size: 0.83rem;
+  color: var(--color-brand-dark);
+  opacity: 0.65;
+}
+
+.switchText {
+  margin-top: 1rem;
+  color: var(--color-brand-dark);
+  opacity: 0.8;
+}
+
+.inlineButton,
+.inlineButtonStrong {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+}
+
+.inlineButton {
+  color: inherit;
+  text-decoration: underline;
+}
+
+.inlineButtonStrong {
+  color: var(--color-brand-10);
+  font-weight: 600;
+}
+
+.switchText a {
+  color: var(--color-brand-10);
+  font-weight: 600;
+}
+
+@media (max-width: 900px) {
+  .panel {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .section {
+    padding-top: 7rem;
+  }
+
+  .container {
+    width: min(1180px, calc(100vw - 1rem));
+  }
+
+  .copyColumn,
+  .formCard {
+    padding: 1.25rem;
+  }
+
+  .formHeader {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .authProductLogo {
+    width: min(14rem, 100%);
+  }
+}
