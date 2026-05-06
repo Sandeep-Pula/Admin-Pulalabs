@@ -6,14 +6,19 @@ export type DashboardView =
   | 'team'
   | 'inventory'
   | 'barcode-desk'
+  | 'cash-register'
+  | 'email'
+  | 'tally-export'
   | 'billing'
   | 'account-ledger'
+  | 'copilot'
   | 'ai-tools'
   | 'render-history'
   | 'crm'
   | 'raise-issue'
   | 'settings'
-  | 'profile';
+  | 'profile'
+  | 'timesheet';
 
 export type KnownBusinessType =
   | 'general_business'
@@ -71,6 +76,29 @@ export interface NoteItem {
   authorName: string;
   createdAt: string;
   content: string;
+}
+
+export interface TimesheetEntry {
+  id: string;
+  userId: string;
+  date: string;
+  clockInTime: string;
+  clockOutTime?: string;
+  totalMinutes?: number;
+}
+
+export type LeaveStatus = 'pending' | 'approved' | 'rejected';
+export type LeaveType = 'sick' | 'casual' | 'unpaid' | 'other';
+
+export interface LeaveRequest {
+  id: string;
+  userId: string;
+  startDate: string;
+  endDate: string;
+  type: LeaveType;
+  reason: string;
+  status: LeaveStatus;
+  createdAt: string;
 }
 
 export interface ActivityItem {
@@ -201,6 +229,7 @@ export interface WorkspaceProfile {
   gstNumber: string;
   teamSize: string;
   website: string;
+  profileSetupCompleted: boolean;
   subscriptionPlan: 'freemium';
   subscriptionStatus: 'active';
   renewalDate: string;
@@ -215,6 +244,12 @@ export interface BillingDefaults {
   defaultPaymentStatus: InvoicePaymentStatus;
   defaultPaymentMethod: InvoicePaymentMethod;
   defaultInvoiceNotes: string;
+  defaultUpiId?: string;
+  physicalInvoicePrintingEnabled?: boolean;
+  printerConnectionType?: 'system' | 'bluetooth' | 'usb' | 'serial' | 'wifi';
+  printerDeviceName?: string;
+  printerPaperWidth?: '58mm' | '80mm';
+  networkPrinterAddress?: string;
 }
 
 export type SupportThreadStatus = 'new' | 'open' | 'in_progress' | 'waiting_on_admin' | 'waiting_on_business' | 'resolved' | 'closed';
@@ -275,8 +310,12 @@ export interface DashboardData {
   financeEntries: FinanceEntry[];
   weeklyMiscRecords: WeeklyMiscRecord[];
   salesInvoices: SalesInvoice[];
+  cashRegisterMenuItems: CashRegisterMenuItem[];
+  cashRegisterCategorySuggestions: CashRegisterCategorySuggestion[];
   supportThreads: SupportThread[];
   recentlyViewedIds: string[];
+  timesheets: TimesheetEntry[];
+  leaveRequests: LeaveRequest[];
 }
 
 export interface CustomerFilters {
@@ -410,6 +449,36 @@ export interface SalesInvoice {
   totalAmount: number;
   notes: string;
   billedBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CashRegisterMenuSize {
+  id: string;
+  label: string;
+  price: number;
+}
+
+export interface CashRegisterMenuItem {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  price: number;
+  taxRate: number;
+  barcodeValue: string;
+  iconKey: string;
+  active: boolean;
+  sortHint: number;
+  sizes: CashRegisterMenuSize[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CashRegisterCategorySuggestion {
+  id: string;
+  name: string;
+  usageCount: number;
   createdAt: string;
   updatedAt: string;
 }

@@ -58,15 +58,22 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const scrollForHash = (nextHash: string, behavior: ScrollBehavior) => {
+    const scrollForHash = (nextHash: string) => {
+      const resetScroll = () => {
+        document.body.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+        window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+      };
+
       if (nextHash.startsWith('#dashboard')) {
-        window.scrollTo({ top: 0, left: 0, behavior });
+        resetScroll();
+        setTimeout(resetScroll, 50);
         return;
       }
 
       const normalizedHash = nextHash || '';
       if (pageLevelHashes.has(normalizedHash)) {
-        window.scrollTo({ top: 0, left: 0, behavior });
+        resetScroll();
+        setTimeout(resetScroll, 50);
         return;
       }
 
@@ -74,20 +81,22 @@ function App() {
       const target = document.getElementById(targetId);
 
       if (!target) {
-        window.scrollTo({ top: 0, left: 0, behavior });
+        resetScroll();
         return;
       }
 
       const navbarOffset = 96;
-      const targetTop = target.getBoundingClientRect().top + window.scrollY - navbarOffset;
-      window.scrollTo({ top: Math.max(0, targetTop), left: 0, behavior });
+      const currentScroll = Math.max(document.body.scrollTop, document.documentElement.scrollTop, window.scrollY);
+      const targetTop = target.getBoundingClientRect().top + currentScroll - navbarOffset;
+      
+      const scrollOpts: ScrollToOptions = { top: Math.max(0, targetTop), left: 0, behavior: 'smooth' };
+      document.body.scrollTo(scrollOpts);
+      window.scrollTo(scrollOpts);
     };
-
-    const behavior: ScrollBehavior = didInitialScrollSync.current ? 'smooth' : 'auto';
 
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        scrollForHash(hash, behavior);
+        scrollForHash(hash);
         didInitialScrollSync.current = true;
       });
     });
@@ -104,12 +113,13 @@ function App() {
       const topHashes = new Set(['#top', '#login', '#signup', '#pricing', '#try-once']);
       if (!topHashes.has(targetHash) && !targetHash.startsWith('#dashboard')) return;
 
-      window.setTimeout(() => {
+      const resetScroll = () => {
+        document.body.scrollTo({ top: 0, left: 0, behavior: 'auto' });
         window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
-      }, 0);
-      window.setTimeout(() => {
-        window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
-      }, 90);
+      };
+
+      window.setTimeout(resetScroll, 0);
+      window.setTimeout(resetScroll, 90);
     };
 
     document.addEventListener('click', handleHashLinkClick, true);

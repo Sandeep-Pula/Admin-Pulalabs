@@ -18,6 +18,9 @@ import type {
   ActivityItem,
   BillingDefaults,
   BusinessType,
+  CashRegisterCategorySuggestion,
+  CashRegisterMenuItem,
+  CashRegisterMenuSize,
   CommunicationLog,
   CustomerProject,
   DashboardView,
@@ -39,8 +42,10 @@ import type {
   TaskItem,
   TeamMember,
   WeeklyMiscRecord,
-  InventoryItem,
   WorkspaceProfile,
+  InventoryItem,
+  TimesheetEntry,
+  LeaveRequest,
 } from '../types';
 import { defaultSidebarViews, filterDashboardViews, getInitials, getInventoryStatus, getStageProgress, recalculateTeamMetrics, stageProgressMap } from '../utils';
 import { buildBusinessBarcodeKey, buildInventoryBarcodeValue, buildInvoiceNumber } from '../barcodeUtils';
@@ -63,6 +68,7 @@ type UserProfileDoc = {
   gstNumber: string;
   teamSize: string;
   website: string;
+  profileSetupCompleted?: boolean;
   subscriptionPlan: 'freemium';
   subscriptionStatus: 'active';
   renewalDate: string;
@@ -106,10 +112,13 @@ const usersCollection = (userId: string, collectionName: string) =>
 
 const userDoc = (userId: string) => doc(requireDb(), 'users', userId);
 const rootUsersCollection = () => collection(requireDb(), 'users');
+const cashRegisterCategoriesCollection = () => collection(requireDb(), 'cashRegisterCategorySuggestions');
+const cashRegisterCategoryDoc = (categoryId: string) => doc(requireDb(), 'cashRegisterCategorySuggestions', categoryId);
 const customerDoc = (userId: string, customerId: string) => doc(requireDb(), 'users', userId, 'customers', customerId);
 const teamMemberDoc = (userId: string, memberId: string) => doc(requireDb(), 'users', userId, 'teamMembers', memberId);
 const taskDoc = (userId: string, taskId: string) => doc(requireDb(), 'users', userId, 'tasks', taskId);
 const inventoryItemDoc = (userId: string, itemId: string) => doc(requireDb(), 'users', userId, 'inventoryItems', itemId);
+const cashRegisterMenuItemDoc = (userId: string, itemId: string) => doc(requireDb(), 'users', userId, 'cashRegisterMenuItems', itemId);
 const financeEntryDoc = (userId: string, entryId: string) => doc(requireDb(), 'users', userId, 'financeEntries', entryId);
 const weeklyMiscRecordDoc = (userId: string, recordId: string) => doc(requireDb(), 'users', userId, 'weeklyMiscRecords', recordId);
 const salesInvoiceDoc = (userId: string, invoiceId: string) => doc(requireDb(), 'users', userId, 'salesInvoices', invoiceId);
@@ -123,6 +132,12 @@ const defaultBillingDefaults: BillingDefaults = {
   defaultPaymentStatus: 'paid',
   defaultPaymentMethod: 'cash',
   defaultInvoiceNotes: '',
+  defaultUpiId: '',
+  physicalInvoicePrintingEnabled: false,
+  printerConnectionType: 'system',
+  printerDeviceName: '',
+  printerPaperWidth: '80mm',
+  networkPrinterAddress: '',
 };
 
 const getUserName = (user: User, preferredName?: string) =>
@@ -152,6 +167,18 @@ const normalizeSidebarViews = (views?: DashboardView[]) => {
     next.splice(insertAt, 0, 'account-ledger');
   }
 
+  if (!next.includes('tally-export')) {
+    const ledgerIndex = next.indexOf('account-ledger');
+    const insertAt = ledgerIndex >= 0 ? ledgerIndex + 1 : next.length;
+    next.splice(insertAt, 0, 'tally-export');
+  }
+
+  if (!next.includes('copilot')) {
+    const aiToolsIndex = next.indexOf('ai-tools');
+    const insertAt = aiToolsIndex >= 0 ? aiToolsIndex : next.length;
+    next.splice(insertAt, 0, 'copilot');
+  }
+
   return Array.from(new Set(next));
 };
 
@@ -168,6 +195,7 @@ const buildWorkspaceProfile = (user: User, profile?: Partial<UserProfileDoc>): W
   gstNumber: profile?.gstNumber?.trim() || '',
   teamSize: profile?.teamSize?.trim() || '',
   website: profile?.website?.trim() || '',
+  profileSetupCompleted: Boolean(profile?.profileSetupCompleted),
   subscriptionPlan: 'freemium',
   subscriptionStatus: 'active',
   renewalDate: profile?.renewalDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
@@ -177,10 +205,33 @@ const buildWorkspaceProfile = (user: User, profile?: Partial<UserProfileDoc>): W
     defaultPaymentStatus: profile?.billingDefaults?.defaultPaymentStatus || defaultBillingDefaults.defaultPaymentStatus,
     defaultPaymentMethod: profile?.billingDefaults?.defaultPaymentMethod || defaultBillingDefaults.defaultPaymentMethod,
     defaultInvoiceNotes: profile?.billingDefaults?.defaultInvoiceNotes || defaultBillingDefaults.defaultInvoiceNotes,
+    defaultUpiId: profile?.billingDefaults?.defaultUpiId || '',
+    physicalInvoicePrintingEnabled: Boolean(profile?.billingDefaults?.physicalInvoicePrintingEnabled),
+    printerConnectionType: profile?.billingDefaults?.printerConnectionType || defaultBillingDefaults.printerConnectionType,
+    printerDeviceName: profile?.billingDefaults?.printerDeviceName || '',
+    printerPaperWidth: profile?.billingDefaults?.printerPaperWidth || defaultBillingDefaults.printerPaperWidth,
+    networkPrinterAddress: profile?.billingDefaults?.networkPrinterAddress || '',
   },
   workspaceOwnerId: profile?.workspaceOwnerId,
   linkedTeamMemberId: profile?.linkedTeamMemberId,
 });
+
+const isWorkspaceProfileSetupComplete = (
+  profile: Pick<UserProfileDoc, 'companyName' | 'userName' | 'businessType' | 'phone' | 'city' | 'studioAddress' | 'teamSize'>,
+) => {
+  const phone = profile.phone.replace(/\D/g, '');
+  const teamSize = profile.teamSize.replace(/\D/g, '');
+
+  return Boolean(
+    profile.companyName.trim() &&
+      profile.userName.trim() &&
+      String(profile.businessType).trim() &&
+      phone.length === 10 &&
+      profile.city.trim() &&
+      profile.studioAddress.trim() &&
+      teamSize,
+  );
+};
 
 const emptyDashboardData = (user: User, profile?: Partial<UserProfileDoc>): DashboardData => ({
   companyName: profile?.companyName?.trim() || getCompanyName(user),
@@ -188,14 +239,18 @@ const emptyDashboardData = (user: User, profile?: Partial<UserProfileDoc>): Dash
   profile: buildWorkspaceProfile(user, profile),
   team: [],
   inventory: [],
+  cashRegisterMenuItems: [],
   financeEntries: [],
   weeklyMiscRecords: [],
   salesInvoices: [],
   supportThreads: [],
+  cashRegisterCategorySuggestions: [],
   customers: [],
   deletedCustomers: [],
   tasks: [],
   recentlyViewedIds: profile?.recentlyViewedIds ?? [],
+  timesheets: [],
+  leaveRequests: [],
 });
 
 const normalizeNote = (value: Partial<NoteItem> | undefined): NoteItem => ({
@@ -204,6 +259,26 @@ const normalizeNote = (value: Partial<NoteItem> | undefined): NoteItem => ({
   authorName: value?.authorName || 'Unknown',
   createdAt: value?.createdAt || nowIso(),
   content: value?.content || '',
+});
+
+const normalizeTimesheet = (id: string, value: Partial<TimesheetEntry> | undefined): TimesheetEntry => ({
+  id,
+  userId: value?.userId || '',
+  date: value?.date || new Date().toISOString().split('T')[0],
+  clockInTime: value?.clockInTime || nowIso(),
+  clockOutTime: value?.clockOutTime,
+  totalMinutes: value?.totalMinutes,
+});
+
+const normalizeLeaveRequest = (id: string, value: Partial<LeaveRequest> | undefined): LeaveRequest => ({
+  id,
+  userId: value?.userId || '',
+  startDate: value?.startDate || '',
+  endDate: value?.endDate || '',
+  type: value?.type || 'casual',
+  reason: value?.reason || '',
+  status: value?.status || 'pending',
+  createdAt: value?.createdAt || nowIso(),
 });
 
 const normalizeActivity = (value: Partial<ActivityItem> | undefined): ActivityItem => ({
@@ -360,6 +435,67 @@ const normalizeInventoryItem = (itemId: string, value: Partial<InventoryItem> | 
   clearanceReason: value?.clearanceReason || '',
   notes: value?.notes || '',
 });
+
+const normalizeCashRegisterSize = (value: Partial<CashRegisterMenuSize> | undefined): CashRegisterMenuSize => ({
+  id: value?.id || createId(),
+  label: value?.label || 'Regular',
+  price: Number(value?.price ?? 0),
+});
+
+const normalizeCashRegisterMenuItem = (
+  itemId: string,
+  value: Partial<CashRegisterMenuItem> | undefined,
+): CashRegisterMenuItem => ({
+  id: itemId,
+  name: value?.name || 'Menu item',
+  category: value?.category || 'Other',
+  description: value?.description || '',
+  price: Number(value?.price ?? 0),
+  taxRate: Number(value?.taxRate ?? defaultBillingDefaults.defaultTaxRate),
+  barcodeValue: value?.barcodeValue || '',
+  iconKey: value?.iconKey || 'cup',
+  active: value?.active ?? true,
+  sortHint: Number(value?.sortHint ?? 0),
+  sizes: (value?.sizes ?? []).map(normalizeCashRegisterSize).filter((size) => size.label.trim()),
+  createdAt: value?.createdAt || nowIso(),
+  updatedAt: value?.updatedAt || value?.createdAt || nowIso(),
+});
+
+const normalizeCashRegisterCategorySuggestion = (
+  categoryId: string,
+  value: Partial<CashRegisterCategorySuggestion> | undefined,
+): CashRegisterCategorySuggestion => ({
+  id: categoryId,
+  name: value?.name || categoryId,
+  usageCount: Number(value?.usageCount ?? 0),
+  createdAt: value?.createdAt || nowIso(),
+  updatedAt: value?.updatedAt || value?.createdAt || nowIso(),
+});
+
+const categorySuggestionId = (name: string) =>
+  name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+
+const upsertCategorySuggestions = (batch: ReturnType<typeof writeBatch>, categories: string[], timestamp: string) => {
+  Array.from(new Set(categories.map((category) => category.trim()).filter(Boolean))).forEach((category) => {
+    const id = categorySuggestionId(category);
+    if (!id) return;
+    batch.set(
+      cashRegisterCategoryDoc(id),
+      {
+        name: category,
+        usageCount: 1,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      { merge: true },
+    );
+  });
+};
 
 const normalizeDeletedCustomer = (
   recordId: string,
@@ -588,6 +724,7 @@ export const dashboardService = {
       gstNumber: '',
       teamSize: '',
       website: 'https://pulalabs.com',
+      profileSetupCompleted: true,
       subscriptionPlan: 'freemium',
       subscriptionStatus: 'active',
       renewalDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
@@ -621,6 +758,7 @@ export const dashboardService = {
       gstNumber: '',
       teamSize: '',
       website: '',
+      profileSetupCompleted: false,
       subscriptionPlan: 'freemium',
       subscriptionStatus: 'active',
       renewalDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
@@ -655,6 +793,17 @@ export const dashboardService = {
       gstNumber: data.gstNumber?.trim() || fallbackProfile.gstNumber,
       teamSize: data.teamSize?.trim() || fallbackProfile.teamSize,
       website: data.website?.trim() || fallbackProfile.website,
+      profileSetupCompleted:
+        data.profileSetupCompleted ??
+        isWorkspaceProfileSetupComplete({
+          companyName: data.companyName?.trim() || fallbackProfile.companyName,
+          userName: data.userName?.trim() || fallbackProfile.userName,
+          businessType: data.businessType || fallbackProfile.businessType,
+          phone: data.phone?.trim() || fallbackProfile.phone,
+          city: data.city?.trim() || fallbackProfile.city,
+          studioAddress: data.studioAddress?.trim() || fallbackProfile.studioAddress,
+          teamSize: data.teamSize?.trim() || fallbackProfile.teamSize,
+        }),
       subscriptionPlan: 'freemium',
       subscriptionStatus: 'active',
       renewalDate: data.renewalDate || fallbackProfile.renewalDate,
@@ -665,6 +814,12 @@ export const dashboardService = {
         defaultPaymentStatus: data.billingDefaults?.defaultPaymentStatus || defaultBillingDefaults.defaultPaymentStatus,
         defaultPaymentMethod: data.billingDefaults?.defaultPaymentMethod || defaultBillingDefaults.defaultPaymentMethod,
         defaultInvoiceNotes: data.billingDefaults?.defaultInvoiceNotes || defaultBillingDefaults.defaultInvoiceNotes,
+        defaultUpiId: data.billingDefaults?.defaultUpiId || fallbackProfile.billingDefaults?.defaultUpiId || '',
+        physicalInvoicePrintingEnabled: Boolean(data.billingDefaults?.physicalInvoicePrintingEnabled ?? fallbackProfile.billingDefaults?.physicalInvoicePrintingEnabled),
+        printerConnectionType: data.billingDefaults?.printerConnectionType || fallbackProfile.billingDefaults?.printerConnectionType || defaultBillingDefaults.printerConnectionType,
+        printerDeviceName: data.billingDefaults?.printerDeviceName || fallbackProfile.billingDefaults?.printerDeviceName || '',
+        printerPaperWidth: data.billingDefaults?.printerPaperWidth || fallbackProfile.billingDefaults?.printerPaperWidth || defaultBillingDefaults.printerPaperWidth,
+        networkPrinterAddress: data.billingDefaults?.networkPrinterAddress || fallbackProfile.billingDefaults?.networkPrinterAddress || '',
       },
       workspaceOwnerId: data.workspaceOwnerId || fallbackProfile.workspaceOwnerId,
       linkedTeamMemberId: data.linkedTeamMemberId || fallbackProfile.linkedTeamMemberId,
@@ -685,10 +840,14 @@ export const dashboardService = {
     let tasks: TaskItem[] = [];
     let deletedCustomers: DeletedCustomerRecord[] = [];
     let inventory: InventoryItem[] = [];
+    let cashRegisterMenuItems: CashRegisterMenuItem[] = [];
+    let cashRegisterCategorySuggestions: CashRegisterCategorySuggestion[] = [];
     let financeEntries: FinanceEntry[] = [];
     let weeklyMiscRecords: WeeklyMiscRecord[] = [];
     let salesInvoices: SalesInvoice[] = [];
     let supportThreads: SupportThread[] = [];
+    let timesheets: TimesheetEntry[] = [];
+    let leaveRequests: LeaveRequest[] = [];
     let workspaceKey = '';
     let teamAccessKey = '';
     let workspaceUnsubscribers: Array<() => void> = [];
@@ -736,12 +895,16 @@ export const dashboardService = {
         customers,
         team: recalculateTeamMetrics(team, customers, tasks),
         inventory,
+        cashRegisterMenuItems,
+        cashRegisterCategorySuggestions,
         financeEntries,
         weeklyMiscRecords,
         salesInvoices,
         supportThreads,
         tasks,
         deletedCustomers,
+        timesheets,
+        leaveRequests,
         recentlyViewedIds: viewerProfile?.recentlyViewedIds ?? [],
       });
     };
@@ -754,10 +917,14 @@ export const dashboardService = {
       tasks = [];
       deletedCustomers = [];
       inventory = [];
+      cashRegisterMenuItems = [];
+      cashRegisterCategorySuggestions = [];
       financeEntries = [];
       weeklyMiscRecords = [];
       salesInvoices = [];
       supportThreads = [];
+      timesheets = [];
+      leaveRequests = [];
     };
 
     const subscribeToWorkspace = (ownerUserId: string, linkedTeamMemberId?: string) => {
@@ -834,6 +1001,32 @@ export const dashboardService = {
           (error) => onError(error),
         ),
         onSnapshot(
+          usersCollection(ownerUserId, 'cashRegisterMenuItems'),
+          (snapshot) => {
+            cashRegisterMenuItems = snapshot.docs
+              .map((item) => normalizeCashRegisterMenuItem(item.id, item.data() as Partial<CashRegisterMenuItem>))
+              .sort((left, right) => {
+                if (left.category !== right.category) return left.category.localeCompare(right.category);
+                return left.name.localeCompare(right.name);
+              });
+            emit();
+          },
+          (error) => onError(error),
+        ),
+        onSnapshot(
+          cashRegisterCategoriesCollection(),
+          (snapshot) => {
+            cashRegisterCategorySuggestions = snapshot.docs
+              .map((item) => normalizeCashRegisterCategorySuggestion(item.id, item.data() as Partial<CashRegisterCategorySuggestion>))
+              .sort((left, right) => right.usageCount - left.usageCount || left.name.localeCompare(right.name));
+            emit();
+          },
+          () => {
+            cashRegisterCategorySuggestions = [];
+            emit();
+          },
+        ),
+        onSnapshot(
           usersCollection(ownerUserId, 'financeEntries'),
           (snapshot) => {
             financeEntries = snapshot.docs
@@ -869,6 +1062,26 @@ export const dashboardService = {
             supportThreads = snapshot.docs
               .map((item) => normalizeSupportThread(item.id, item.data() as Partial<SupportThread>))
               .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime());
+            emit();
+          },
+          (error) => onError(error),
+        ),
+        onSnapshot(
+          usersCollection(ownerUserId, 'timesheets'),
+          (snapshot) => {
+            timesheets = snapshot.docs
+              .map((item) => normalizeTimesheet(item.id, item.data() as Partial<TimesheetEntry>))
+              .sort((left, right) => new Date(right.clockInTime).getTime() - new Date(left.clockInTime).getTime());
+            emit();
+          },
+          (error) => onError(error),
+        ),
+        onSnapshot(
+          usersCollection(ownerUserId, 'leaveRequests'),
+          (snapshot) => {
+            leaveRequests = snapshot.docs
+              .map((item) => normalizeLeaveRequest(item.id, item.data() as Partial<LeaveRequest>))
+              .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
             emit();
           },
           (error) => onError(error),
@@ -950,11 +1163,14 @@ export const dashboardService = {
       | 'billingDefaults'
     >,
   ) {
+    const profileSetupCompleted = isWorkspaceProfileSetupComplete(profile);
+
     await setDoc(
       userDoc(userId),
       {
         userId,
         ...profile,
+        profileSetupCompleted,
         subscriptionPlan: 'freemium',
         subscriptionStatus: 'active',
         updatedAt: nowIso(),
@@ -1372,6 +1588,85 @@ export const dashboardService = {
     await batch.commit();
   },
 
+  async saveCashRegisterMenuItems(
+    userId: string,
+    items: Array<Omit<CashRegisterMenuItem, 'id' | 'createdAt' | 'updatedAt'> & { id?: string; createdAt?: string }>,
+  ) {
+    const timestamp = nowIso();
+    const batch = writeBatch(requireDb());
+
+    const categories = items.map((item) => item.category);
+    items.forEach((item) => {
+      const ref = item.id ? cashRegisterMenuItemDoc(userId, item.id) : doc(usersCollection(userId, 'cashRegisterMenuItems'));
+      batch.set(
+        ref,
+        {
+          name: item.name.trim(),
+          category: item.category.trim() || 'Other',
+          description: item.description?.trim() || '',
+          price: Number(item.price || 0),
+          taxRate: Number(item.taxRate ?? defaultBillingDefaults.defaultTaxRate),
+          barcodeValue: item.barcodeValue.trim(),
+          iconKey: item.iconKey || 'cup',
+          active: item.active,
+          sortHint: Number(item.sortHint ?? 0),
+          sizes: item.sizes.map((size) => ({
+            id: size.id || createId(),
+            label: size.label.trim(),
+            price: Number(size.price || 0),
+          })),
+          createdAt: item.createdAt || timestamp,
+          updatedAt: timestamp,
+        },
+        { merge: true },
+      );
+    });
+    await batch.commit();
+    try {
+      const categoryBatch = writeBatch(requireDb());
+      upsertCategorySuggestions(categoryBatch, categories, timestamp);
+      await categoryBatch.commit();
+    } catch {
+      // Global category suggestions are best-effort and should never block register item creation.
+    }
+  },
+
+  async updateCashRegisterMenuItem(userId: string, itemId: string, patch: Partial<CashRegisterMenuItem>) {
+    const timestamp = nowIso();
+    const batch = writeBatch(requireDb());
+    batch.set(
+      cashRegisterMenuItemDoc(userId, itemId),
+      {
+        ...patch,
+        updatedAt: timestamp,
+      },
+      { merge: true },
+    );
+    await batch.commit();
+    if (patch.category) {
+      try {
+        const categoryBatch = writeBatch(requireDb());
+        upsertCategorySuggestions(categoryBatch, [patch.category], timestamp);
+        await categoryBatch.commit();
+      } catch {
+        // Global category suggestions are best-effort.
+      }
+    }
+  },
+
+  async saveCashRegisterCategorySuggestion(category: string) {
+    const timestamp = nowIso();
+    const batch = writeBatch(requireDb());
+    upsertCategorySuggestions(batch, [category], timestamp);
+    await batch.commit();
+  },
+
+  async deleteCashRegisterMenuItem(userId: string, itemId: string) {
+    const batch = writeBatch(requireDb());
+    batch.delete(cashRegisterMenuItemDoc(userId, itemId));
+    await batch.commit();
+  },
+
   async addFinanceEntry(
     userId: string,
     payload: Pick<FinanceEntry, 'title' | 'kind' | 'category' | 'amount' | 'status' | 'dueAt' | 'customerId' | 'linkedCustomerName' | 'projectTitle' | 'notes' | 'employeeMemberId' | 'employeeName' | 'paycheckNumber' | 'payPeriodLabel' | 'paymentMethod' | 'issuedBy' | 'referenceDate' | 'transactionFlow' | 'autoGenerated' | 'autoGroupKey'> & { accountingSource?: AccountingSource },
@@ -1613,6 +1908,92 @@ export const dashboardService = {
     };
   },
 
+  async completeCashRegisterSale(
+    userId: string,
+    payload: {
+      existingInvoiceId?: string;
+      customerName: string;
+      paymentStatus: InvoicePaymentStatus;
+      paymentMethod: InvoicePaymentMethod;
+      taxRate: number;
+      notes: string;
+      billedBy: string;
+      lineItems: SalesInvoiceLineItem[];
+    },
+  ) {
+    if (!payload.lineItems.length) {
+      throw new Error('Add at least one item before finalizing the cash register bill.');
+    }
+
+    const timestamp = nowIso();
+    const invoiceRef = payload.existingInvoiceId ? salesInvoiceDoc(userId, payload.existingInvoiceId) : doc(usersCollection(userId, 'salesInvoices'));
+    const financeRef = doc(usersCollection(userId, 'financeEntries'));
+    const businessBarcodeKey = buildBusinessBarcodeKey(userId);
+    const lineItems = payload.lineItems.map((line) => ({
+      inventoryItemId: line.inventoryItemId,
+      barcodeValue: line.barcodeValue,
+      itemName: line.itemName,
+      sku: line.sku,
+      quantity: Number(line.quantity || 1),
+      unitPrice: Number(line.unitPrice || 0),
+      lineSubtotal: Number(line.lineSubtotal || line.unitPrice * line.quantity || 0),
+    }));
+    const subtotal = lineItems.reduce((sum, line) => sum + line.lineSubtotal, 0);
+    const taxAmount = Number(((subtotal * payload.taxRate) / 100).toFixed(2));
+    const totalAmount = subtotal + taxAmount;
+    const invoiceNumber = buildInvoiceNumber(userId, invoiceRef.id, timestamp);
+    const batch = writeBatch(requireDb());
+
+    batch.set(salesInvoiceDoc(userId, invoiceRef.id), {
+      invoiceNumber,
+      status: 'finalized',
+      businessBarcodeKey,
+      customerName: payload.customerName.trim() || 'Walk-in customer',
+      paymentStatus: payload.paymentStatus,
+      paymentMethod: payload.paymentMethod,
+      lineItems,
+      subtotal,
+      taxRate: payload.taxRate,
+      taxAmount,
+      totalAmount,
+      notes: payload.notes.trim(),
+      billedBy: payload.billedBy,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+
+    batch.set(financeEntryDoc(userId, financeRef.id), {
+      title: invoiceNumber,
+      kind: 'income',
+      category: 'client_payment',
+      amount: totalAmount,
+      status: payload.paymentStatus,
+      dueAt: timestamp,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      projectTitle: 'Cash register sale',
+      sourceInvoiceId: invoiceRef.id,
+      accountingSource: 'invoice',
+      referenceDate: timestamp,
+      paymentMethod: payload.paymentMethod,
+      issuedBy: payload.billedBy,
+      notes: payload.notes.trim() || `Generated from cash register for ${payload.customerName.trim() || 'Walk-in customer'}.`,
+    });
+
+    await batch.commit();
+
+    return {
+      invoiceId: invoiceRef.id,
+      invoiceNumber,
+      subtotal,
+      taxAmount,
+      totalAmount,
+      lineItems,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+  },
+
   async deleteSalesInvoice(userId: string, invoiceId: string) {
     const batch = writeBatch(requireDb());
     batch.delete(salesInvoiceDoc(userId, invoiceId));
@@ -1687,5 +2068,37 @@ export const dashboardService = {
   },
   async deleteCustomerRecord(userId: string, customer: CustomerProject, deletedBy: string) {
     await this.archiveCustomer(userId, customer, deletedBy);
+  },
+  async clockIn(userId: string, teamMemberId: string) {
+    const timestamp = nowIso();
+    const entryId = createId();
+    const ref = doc(usersCollection(userId, 'timesheets'), entryId);
+    const entry: Partial<TimesheetEntry> = {
+      userId: teamMemberId,
+      date: timestamp.split('T')[0],
+      clockInTime: timestamp,
+    };
+    await setDoc(ref, entry);
+  },
+  async clockOut(userId: string, entryId: string, totalMinutes: number) {
+    const ref = doc(usersCollection(userId, 'timesheets'), entryId);
+    await updateDoc(ref, {
+      clockOutTime: nowIso(),
+      totalMinutes,
+    });
+  },
+  async requestLeave(userId: string, payload: Partial<LeaveRequest>) {
+    const leaveId = createId();
+    const ref = doc(usersCollection(userId, 'leaveRequests'), leaveId);
+    const entry: Partial<LeaveRequest> = {
+      ...payload,
+      status: 'pending',
+      createdAt: nowIso(),
+    };
+    await setDoc(ref, entry);
+  },
+  async updateLeaveStatus(userId: string, leaveId: string, status: 'pending' | 'approved' | 'rejected') {
+    const ref = doc(usersCollection(userId, 'leaveRequests'), leaveId);
+    await updateDoc(ref, { status });
   },
 };

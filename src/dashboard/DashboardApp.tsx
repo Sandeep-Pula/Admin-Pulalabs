@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import clsx from 'clsx';
 import { onAuthStateChanged, type User } from 'firebase/auth';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Building2 } from 'lucide-react';
 import { auth } from '../lib/firebase';
 import { authService } from '../lib/authService';
 import { createId } from '../lib/id';
@@ -13,6 +13,7 @@ import { dashboardHash, filterDashboardViews, getStageProgress, isOwnerAccount, 
 import type {
   BillingDefaults,
   BusinessType,
+  CashRegisterMenuItem,
   CustomerFilters,
   CustomerProject,
   DashboardData,
@@ -36,9 +37,13 @@ import { CustomersPage } from './pages/CustomersPage';
 import { TeamPage } from './pages/TeamPage';
 import { InventoryPage } from './pages/InventoryPage';
 import { BarcodeDeskPage } from './pages/BarcodeDeskPage';
+import { CashRegisterPage } from './pages/CashRegisterPage';
+import { EmailPage } from './pages/EmailPage';
+import { TallyExportPage } from './pages/TallyExportPage';
 import { BillingPage } from './pages/BillingPage';
 import { CrmPage } from './pages/CrmPage';
 import { AIToolsPage } from './pages/AIToolsPage';
+import { CopilotPage } from './pages/CopilotPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { TeamMemberProfilePage } from './pages/TeamMemberProfilePage';
 import { SettingsPage } from './pages/SettingsPage';
@@ -54,6 +59,7 @@ import { TeamMemberDrawer } from './components/TeamMemberDrawer';
 import { AIBusinessAssistant } from './components/AIBusinessAssistant';
 import { OperationsPage } from './pages/OperationsPage';
 import { AccountLedgerPage } from './pages/AccountLedgerPage';
+import { TimesheetPage } from './pages/TimesheetPage';
 
 const defaultFilters: CustomerFilters = {
   search: '',
@@ -86,6 +92,7 @@ export const DashboardApp = () => {
   const [addTeamMemberOpen, setAddTeamMemberOpen] = useState(false);
   const [selectedTeamMemberId, setSelectedTeamMemberId] = useState<string | null>(null);
   const [deleteTeamCandidateId, setDeleteTeamCandidateId] = useState<string | null>(null);
+  const [aivaOpen, setAivaOpen] = useState(false);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
 
   const pushToast = useCallback((title: string, description?: string) => {
@@ -201,6 +208,7 @@ export const DashboardApp = () => {
   const isSuperAdminIdentity = isSuperAdminEmail(user?.email);
   const isSuperAdmin = data?.profile.accountType === 'super_admin' || isSuperAdminIdentity;
   const isOwner = isOwnerAccount(data?.profile.accountType);
+  const requiresProfileSetup = Boolean(data && isOwner && !isSuperAdmin && !data.profile.profileSetupCompleted);
   const allowedViews = filterDashboardViews(data?.profile.sidebarViews);
   const navigableViews: DashboardView[] = useMemo(
     () => (
@@ -208,7 +216,7 @@ export const DashboardApp = () => {
         ? ['super-admin']
         : isOwner
           ? allowedViews
-          : Array.from(new Set<DashboardView>([...allowedViews, 'profile']))
+          : Array.from(new Set<DashboardView>([...allowedViews.filter((view) => view !== 'copilot'), 'profile']))
     ),
     [allowedViews, isOwner, isSuperAdmin],
   );
@@ -864,6 +872,78 @@ export const DashboardApp = () => {
     }
   };
 
+  const handleFinalizeCashRegisterSale = async (payload: {
+    existingInvoiceId?: string;
+    customerName: string;
+    paymentStatus: InvoicePaymentStatus;
+    paymentMethod: InvoicePaymentMethod;
+    taxRate: number;
+    notes: string;
+    billedBy: string;
+    lineItems: SalesInvoiceLineItem[];
+  }) => {
+    if (!user) {
+      throw new Error('Please log in again before finalizing the sale.');
+    }
+
+    try {
+      const result = await dashboardService.completeCashRegisterSale(workspaceUserId, payload);
+      pushToast('Cash register invoice created', `${result.invoiceNumber} is ready to print.`);
+      return result;
+    } catch (nextError) {
+      handleMutationError(nextError, 'Unable to finalize this cash register sale.');
+      throw nextError;
+    }
+  };
+
+  const handleSaveCashRegisterMenuItems = async (
+    items: Array<Omit<CashRegisterMenuItem, 'id' | 'createdAt' | 'updatedAt'> & { id?: string; createdAt?: string }>,
+  ) => {
+    if (!user) return;
+
+    try {
+      await dashboardService.saveCashRegisterMenuItems(workspaceUserId, items);
+      pushToast('Cash register updated', 'Menu buttons were saved.');
+    } catch (nextError) {
+      handleMutationError(nextError, 'Unable to save cash register menu items.');
+      throw nextError;
+    }
+  };
+
+  const handleUpdateCashRegisterMenuItem = async (itemId: string, patch: Partial<CashRegisterMenuItem>) => {
+    if (!user) return;
+
+    try {
+      await dashboardService.updateCashRegisterMenuItem(workspaceUserId, itemId, patch);
+      pushToast('Cash register item saved');
+    } catch (nextError) {
+      handleMutationError(nextError, 'Unable to update this cash register item.');
+      throw nextError;
+    }
+  };
+
+  const handleDeleteCashRegisterMenuItem = async (itemId: string) => {
+    if (!user) return;
+
+    try {
+      await dashboardService.deleteCashRegisterMenuItem(workspaceUserId, itemId);
+      pushToast('Cash register item deleted');
+    } catch (nextError) {
+      handleMutationError(nextError, 'Unable to delete this cash register item.');
+      throw nextError;
+    }
+  };
+
+  const handleSaveCashRegisterCategorySuggestion = async (category: string) => {
+    if (!category.trim()) return;
+
+    try {
+      await dashboardService.saveCashRegisterCategorySuggestion(category);
+    } catch {
+      // Shared category learning is best-effort. Local register edits should never fail because of it.
+    }
+  };
+
   const handleSaveInvoiceDraft = async (payload: {
     draftId?: string;
     customerName: string;
@@ -1157,7 +1237,7 @@ export const DashboardApp = () => {
         viewerName={data.userName}
         viewerLabel={isOwner ? 'Business owner' : 'Team member'}
         businessConfig={businessConfig}
-        visibleViews={data.profile.sidebarViews}
+        visibleViews={isOwner ? data.profile.sidebarViews : data.profile.sidebarViews.filter((view) => view !== 'copilot')}
         canManageSidebar={isOwner}
         canViewProfile
         onNavigate={(view) => handleNavigate(dashboardHash(view))}
@@ -1179,9 +1259,11 @@ export const DashboardApp = () => {
               sidebarViews,
               billingDefaults: data.profile.billingDefaults,
             });
+            setData((prev) => (prev ? { ...prev, profile: { ...prev.profile, sidebarViews } } : null));
             pushToast('Sidebar updated', 'Your sidebar shortcuts were saved.');
           } catch (nextError) {
             handleMutationError(nextError, 'Unable to save sidebar changes.');
+            throw nextError;
           }
         }}
         open={sidebarOpen}
@@ -1198,6 +1280,7 @@ export const DashboardApp = () => {
           searchResults={topbarSearchResults}
           onSearchResultSelect={handleSearchResultSelect}
           onOpenSidebar={() => setSidebarOpen(true)}
+          onOpenAiva={() => setAivaOpen(true)}
           onToggleDesktopSidebar={() => setDesktopSidebarCollapsed((current) => !current)}
           desktopSidebarCollapsed={desktopSidebarCollapsed}
           onLogout={handleLogout}
@@ -1208,6 +1291,14 @@ export const DashboardApp = () => {
               <div className="font-semibold">Cloud sync needs attention</div>
               <div className="mt-1 text-amber-800/90">
                 {syncIssue}
+              </div>
+            </div>
+          ) : null}
+          {requiresProfileSetup && activeView === 'profile' ? (
+            <div className="mb-4 rounded-[24px] border border-brand-30 bg-white px-4 py-3 text-sm text-brand-dark shadow-sm">
+              <div className="font-semibold">Complete your business profile to unlock the workspace</div>
+              <div className="mt-1 text-brand-dark/70">
+                Add your business type, contact number, city, address, and team size, then save the profile.
               </div>
             </div>
           ) : null}
@@ -1283,6 +1374,36 @@ export const DashboardApp = () => {
               inventory={data.inventory}
               salesInvoices={data.salesInvoices}
             />
+          ) : activeView === 'cash-register' ? (
+            <CashRegisterPage
+              companyName={data.profile.companyName}
+              businessProfile={data.profile}
+              billedBy={data.userName}
+              menuItems={data.cashRegisterMenuItems}
+              categorySuggestions={data.cashRegisterCategorySuggestions}
+              salesInvoices={data.salesInvoices}
+              onSaveMenuItems={handleSaveCashRegisterMenuItems}
+              onUpdateMenuItem={handleUpdateCashRegisterMenuItem}
+              onDeleteMenuItem={handleDeleteCashRegisterMenuItem}
+              onFinalizeSale={handleFinalizeCashRegisterSale}
+              onSaveDraft={handleSaveInvoiceDraft}
+              onDeleteDraft={handleDeleteInvoiceDraft}
+              onSaveCategorySuggestion={handleSaveCashRegisterCategorySuggestion}
+            />
+          ) : activeView === 'email' ? (
+            <EmailPage
+              companyName={data.profile.companyName}
+              businessProfile={data.profile}
+            />
+          ) : activeView === 'tally-export' ? (
+            <TallyExportPage
+              companyName={data.profile.companyName}
+              businessProfile={data.profile}
+              financeEntries={data.financeEntries}
+              salesInvoices={data.salesInvoices}
+              inventory={data.inventory}
+              customers={data.customers}
+            />
           ) : activeView === 'billing' ? (
             <BillingPage
               companyName={data.profile.companyName}
@@ -1328,8 +1449,43 @@ export const DashboardApp = () => {
               onUpdateCustomer={handleUpdateCustomer}
               actorName={data.userName}
             />
+          ) : activeView === 'copilot' ? (
+            isOwner ? (
+              <CopilotPage
+                user={user}
+                profile={data.profile}
+              />
+            ) : (
+              <div className="rounded-[28px] border border-brand-30 bg-white p-6 text-sm text-brand-dark shadow-sm">
+                Business Copilot is available only to the business owner.
+              </div>
+            )
           ) : activeView === 'ai-tools' ? (
             <AIToolsPage businessConfig={businessConfig} />
+          ) : activeView === 'timesheet' ? (
+            <TimesheetPage
+              timesheets={data.timesheets}
+              leaveRequests={data.leaveRequests}
+              team={data.team}
+              isOwner={isOwnerAccount(data.profile.accountType)}
+              viewerId={data.profile.linkedTeamMemberId || user.uid}
+              onClockIn={async (userId) => {
+                await dashboardService.clockIn(user.uid, userId);
+                pushToast('Clocked In', 'Your attendance has been recorded.');
+              }}
+              onClockOut={async (entryId, totalMinutes) => {
+                await dashboardService.clockOut(user.uid, entryId, totalMinutes);
+                pushToast('Clocked Out', 'Your attendance has been updated.');
+              }}
+              onRequestLeave={async (payload) => {
+                await dashboardService.requestLeave(user.uid, payload);
+                pushToast('Leave Requested', 'Your request has been submitted for approval.');
+              }}
+              onUpdateLeaveStatus={async (leaveId, status) => {
+                await dashboardService.updateLeaveStatus(user.uid, leaveId, status);
+                pushToast('Leave Updated', `Leave request has been ${status}.`);
+              }}
+            />
           ) : activeView === 'settings' ? (
             <SettingsPage
               companyName={data.profile.companyName}
@@ -1369,6 +1525,34 @@ export const DashboardApp = () => {
           )}
         </main>
       </div>
+      {requiresProfileSetup && activeView !== 'profile' ? (
+        <div
+          className="fixed inset-0 z-[90] flex items-center justify-center bg-brand-dark/45 px-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="profile-setup-title"
+        >
+          <div className="w-full max-w-xl rounded-[32px] border border-brand-30 bg-white p-6 shadow-2xl sm:p-8">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-brand-60 text-brand-10">
+              <Building2 size={26} aria-hidden="true" />
+            </div>
+            <h2 id="profile-setup-title" className="mt-5 text-3xl font-semibold tracking-tight text-brand-dark">
+              Set up your business profile
+            </h2>
+            <p className="mt-3 text-base leading-7 text-brand-dark/70">
+              Before using the dashboard, complete your business profile so PULA Biz can personalize the workspace, sidebar, billing details, and reports for your business.
+            </p>
+            <button
+              type="button"
+              onClick={() => handleNavigate(dashboardHash('profile'))}
+              className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-brand-10 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-brand-10/20 transition hover:bg-brand-dark focus:outline-none focus-visible:ring-4 focus-visible:ring-brand-10/25 sm:w-auto"
+            >
+              Visit profile setup
+              <ArrowRight size={18} aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+      ) : null}
       <ToastStack toasts={toasts} />
       <CustomerDrawer
         customer={selectedCustomer}
@@ -1455,6 +1639,8 @@ export const DashboardApp = () => {
         data={data}
         businessConfig={businessConfig}
         canWrite={isOwner}
+        open={aivaOpen}
+        onClose={() => setAivaOpen(false)}
         onAddInventoryItem={handleAddInventoryItem}
         onUpdateInventoryItem={handleUpdateInventoryItem}
         onDeleteInventoryItem={handleDeleteInventoryItem}
