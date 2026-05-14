@@ -1,6 +1,7 @@
 import type { User } from 'firebase/auth';
 import {
   collection,
+  collectionGroup,
   doc,
   getDoc,
   onSnapshot,
@@ -21,7 +22,6 @@ import type {
   CashRegisterCategorySuggestion,
   CashRegisterMenuItem,
   CashRegisterMenuSize,
-  CommunicationLog,
   CustomerProject,
   DashboardView,
   DashboardData,
@@ -39,6 +39,8 @@ import type {
   SupportMessage,
   SupportThread,
   SupportThreadStatus,
+  SubscriptionPlan,
+  SubscriptionStatus,
   TaskItem,
   TeamMember,
   WeeklyMiscRecord,
@@ -53,6 +55,7 @@ import { buildBusinessBarcodeKey, buildInventoryBarcodeValue, buildInvoiceNumber
 type DashboardSnapshotListener = (data: DashboardData) => void;
 type DashboardErrorListener = (error: Error) => void;
 type SuperAdminSnapshotListener = (data: { businesses: PlatformBusinessAccount[]; supportThreads: SupportThread[] }) => void;
+type TeamMemberIndex = Record<string, { teamMemberIds: string[]; teamAuthUids: string[]; teamMemberCount: number }>;
 
 type UserProfileDoc = {
   userId: string;
@@ -69,8 +72,8 @@ type UserProfileDoc = {
   teamSize: string;
   website: string;
   profileSetupCompleted?: boolean;
-  subscriptionPlan: 'freemium';
-  subscriptionStatus: 'active';
+  subscriptionPlan: SubscriptionPlan;
+  subscriptionStatus: SubscriptionStatus;
   renewalDate: string;
   recentlyViewedIds: string[];
   sidebarViews: DashboardView[];
@@ -127,6 +130,11 @@ const supportThreadsCollection = () => collection(requireDb(), 'supportThreads')
 const supportThreadDoc = (ticketId: string) => doc(requireDb(), 'supportThreads', ticketId);
 
 const nowIso = () => new Date().toISOString();
+const shortUserId = (userId: string) => userId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8).toUpperCase() || userId.slice(0, 8).toUpperCase();
+const normalizeSubscriptionPlan = (plan?: string): SubscriptionPlan =>
+  plan === 'focused' || plan === 'growth' || plan === 'business_pro' ? plan : 'freemium';
+const normalizeSubscriptionStatus = (status?: string): SubscriptionStatus =>
+  status === 'trialing' || status === 'paused' || status === 'cancelled' ? status : 'active';
 const defaultBillingDefaults: BillingDefaults = {
   defaultTaxRate: 5,
   defaultPaymentStatus: 'paid',
@@ -149,37 +157,8 @@ const getCompanyName = (user: User, preferredName?: string) => {
 };
 
 const normalizeSidebarViews = (views?: DashboardView[]) => {
-  const filtered = filterDashboardViews(views);
-  const next = filtered.length ? [...filtered] : [...defaultSidebarViews];
-
-  if (!next.includes('sales-overview')) {
-    next.unshift('sales-overview');
-  }
-
-  if (!next.includes('overview')) {
-    const overviewInsertIndex = next.includes('sales-overview') ? 1 : 0;
-    next.splice(overviewInsertIndex, 0, 'overview');
-  }
-
-  if (!next.includes('account-ledger')) {
-    const billingIndex = next.indexOf('billing');
-    const insertAt = billingIndex >= 0 ? billingIndex + 1 : next.length;
-    next.splice(insertAt, 0, 'account-ledger');
-  }
-
-  if (!next.includes('tally-export')) {
-    const ledgerIndex = next.indexOf('account-ledger');
-    const insertAt = ledgerIndex >= 0 ? ledgerIndex + 1 : next.length;
-    next.splice(insertAt, 0, 'tally-export');
-  }
-
-  if (!next.includes('copilot')) {
-    const aiToolsIndex = next.indexOf('ai-tools');
-    const insertAt = aiToolsIndex >= 0 ? aiToolsIndex : next.length;
-    next.splice(insertAt, 0, 'copilot');
-  }
-
-  return Array.from(new Set(next));
+  if (!views) return [...defaultSidebarViews];
+  return Array.from(new Set(filterDashboardViews(views)));
 };
 
 const buildWorkspaceProfile = (user: User, profile?: Partial<UserProfileDoc>): WorkspaceProfile => ({
@@ -196,8 +175,8 @@ const buildWorkspaceProfile = (user: User, profile?: Partial<UserProfileDoc>): W
   teamSize: profile?.teamSize?.trim() || '',
   website: profile?.website?.trim() || '',
   profileSetupCompleted: Boolean(profile?.profileSetupCompleted),
-  subscriptionPlan: 'freemium',
-  subscriptionStatus: 'active',
+  subscriptionPlan: normalizeSubscriptionPlan(profile?.subscriptionPlan),
+  subscriptionStatus: normalizeSubscriptionStatus(profile?.subscriptionStatus),
   renewalDate: profile?.renewalDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
   sidebarViews: normalizeSidebarViews(profile?.sidebarViews),
   billingDefaults: {
@@ -290,15 +269,6 @@ const normalizeActivity = (value: Partial<ActivityItem> | undefined): ActivityIt
   actorName: value?.actorName || 'System',
 });
 
-const normalizeCommunication = (value: Partial<CommunicationLog> | undefined): CommunicationLog => ({
-  id: value?.id || createId(),
-  type: value?.type || 'comment',
-  createdAt: value?.createdAt || nowIso(),
-  actorName: value?.actorName || 'System',
-  summary: value?.summary || '',
-  outcome: value?.outcome || '',
-});
-
 const normalizeRender = (value: Partial<RenderAsset> | undefined): RenderAsset => ({
   id: value?.id || createId(),
   name: value?.name || 'Untitled render',
@@ -365,13 +335,13 @@ const normalizeCustomer = (
     activityScore: value?.activityScore ?? 0,
     wallpaperCode: value?.wallpaperCode,
     curtainCode: value?.curtainCode,
-    communicationLog: (value?.communicationLog ?? []).map(normalizeCommunication),
     quote: {
       estimatedValue: value?.quote?.estimatedValue ?? 0,
       quoteValue: value?.quote?.quoteValue ?? 0,
       quoteStatus: value?.quote?.quoteStatus || 'draft',
       paymentStage: value?.quote?.paymentStage || 'not_started',
       advanceReceived: value?.quote?.advanceReceived ?? 0,
+      partiallyPaidAmount: value?.quote?.partiallyPaidAmount ?? 0,
     },
     renders: (value?.renders ?? []).map(normalizeRender),
     renderQueue: (value?.renderQueue ?? []).map(normalizeRenderRequest),
@@ -608,13 +578,24 @@ const normalizeSupportThread = (threadId: string, value: Partial<SupportThread> 
   unreadForAdmin: value?.unreadForAdmin ?? false,
 });
 
-const normalizePlatformBusinessAccount = (userId: string, value: Partial<UserProfileDoc> | undefined): PlatformBusinessAccount => ({
+const normalizePlatformBusinessAccount = (
+  userId: string,
+  value: Partial<UserProfileDoc> | undefined,
+  teamIndex?: TeamMemberIndex,
+): PlatformBusinessAccount => ({
   userId,
+  hashedUserId: shortUserId(userId),
   companyName: value?.companyName?.trim() || 'Untitled workspace',
   ownerName: value?.userName?.trim() || 'Unknown owner',
   email: value?.email?.trim() || '',
   phone: value?.phone?.trim() || '',
   businessType: value?.businessType || 'general_business',
+  subscriptionPlan: normalizeSubscriptionPlan(value?.subscriptionPlan),
+  subscriptionStatus: normalizeSubscriptionStatus(value?.subscriptionStatus),
+  renewalDate: value?.renewalDate || '',
+  teamMemberIds: teamIndex?.[userId]?.teamMemberIds ?? [],
+  teamAuthUids: teamIndex?.[userId]?.teamAuthUids ?? [],
+  teamMemberCount: teamIndex?.[userId]?.teamMemberCount ?? 0,
   createdAt: value?.createdAt || nowIso(),
   updatedAt: value?.updatedAt || nowIso(),
 });
@@ -658,22 +639,13 @@ const buildCustomerPayload = (
     needsFollowUp: true,
     renderPending: false,
     activityScore: 12,
-    communicationLog: [
-      {
-        id: createId(),
-        type: 'comment',
-        createdAt: now,
-        actorName,
-        summary: 'Customer created from dashboard',
-        outcome: 'Ready for first room upload and project intake.',
-      },
-    ],
     quote: {
       estimatedValue: 0,
       quoteValue: 0,
       quoteStatus: 'draft',
       paymentStage: 'not_started',
       advanceReceived: 0,
+      partiallyPaidAmount: 0,
     },
     renders: [],
     renderQueue: [],
@@ -725,7 +697,7 @@ export const dashboardService = {
       teamSize: '',
       website: 'https://pulalabs.com',
       profileSetupCompleted: true,
-      subscriptionPlan: 'freemium',
+      subscriptionPlan: 'business_pro',
       subscriptionStatus: 'active',
       renewalDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
       recentlyViewedIds: [],
@@ -888,6 +860,9 @@ export const dashboardService = {
           phone: isTeamMember
             ? accessMember?.phone || viewerProfile?.phone?.trim() || base.profile.phone
             : sourceProfile?.phone?.trim() || base.profile.phone,
+          subscriptionPlan: normalizeSubscriptionPlan(sourceProfile?.subscriptionPlan ?? viewerProfile?.subscriptionPlan),
+          subscriptionStatus: normalizeSubscriptionStatus(sourceProfile?.subscriptionStatus ?? viewerProfile?.subscriptionStatus),
+          renewalDate: sourceProfile?.renewalDate || viewerProfile?.renewalDate || base.profile.renewalDate,
           sidebarViews: visibleViews,
           workspaceOwnerId: viewerProfile?.workspaceOwnerId,
           linkedTeamMemberId: viewerProfile?.linkedTeamMemberId,
@@ -1171,8 +1146,6 @@ export const dashboardService = {
         userId,
         ...profile,
         profileSetupCompleted,
-        subscriptionPlan: 'freemium',
-        subscriptionStatus: 'active',
         updatedAt: nowIso(),
       },
       { merge: true },
@@ -1181,9 +1154,14 @@ export const dashboardService = {
 
   subscribeToSuperAdminConsole(onData: SuperAdminSnapshotListener, onError: DashboardErrorListener) {
     let businesses: PlatformBusinessAccount[] = [];
+    let ownerProfiles: Array<{ id: string; data: Partial<UserProfileDoc> }> = [];
+    let teamIndex: TeamMemberIndex = {};
     let supportThreads: SupportThread[] = [];
 
     const emit = () => {
+      businesses = ownerProfiles
+        .map((item) => normalizePlatformBusinessAccount(item.id, item.data, teamIndex))
+        .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
       onData({
         businesses,
         supportThreads,
@@ -1194,11 +1172,28 @@ export const dashboardService = {
       onSnapshot(
         rootUsersCollection(),
         (snapshot) => {
-          businesses = snapshot.docs
+          ownerProfiles = snapshot.docs
             .map((item) => ({ id: item.id, data: item.data() as Partial<UserProfileDoc> }))
-            .filter((item) => item.data.accountType === 'owner')
-            .map((item) => normalizePlatformBusinessAccount(item.id, item.data))
-            .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+            .filter((item) => item.data.accountType === 'owner');
+          emit();
+        },
+        (error) => onError(error),
+      ),
+      onSnapshot(
+        collectionGroup(requireDb(), 'teamMembers'),
+        (snapshot) => {
+          const nextIndex: TeamMemberIndex = {};
+          snapshot.docs.forEach((item) => {
+            const ownerId = item.ref.parent.parent?.id;
+            if (!ownerId) return;
+            const member = normalizeTeamMember(item.id, item.data() as Partial<TeamMember>);
+            const current = nextIndex[ownerId] ?? { teamMemberIds: [], teamAuthUids: [], teamMemberCount: 0 };
+            current.teamMemberIds.push(item.id);
+            if (member.authUid) current.teamAuthUids.push(member.authUid);
+            current.teamMemberCount += 1;
+            nextIndex[ownerId] = current;
+          });
+          teamIndex = nextIndex;
           emit();
         },
         (error) => onError(error),
@@ -1218,6 +1213,32 @@ export const dashboardService = {
     return () => {
       unsubscribers.forEach((unsubscribe) => unsubscribe());
     };
+  },
+
+  async updateUserSubscription(
+    userId: string,
+    patch: {
+      subscriptionPlan: SubscriptionPlan;
+      subscriptionStatus?: SubscriptionStatus;
+      renewalDate?: string;
+    },
+  ) {
+    const timestamp = nowIso();
+    const nextPlan = normalizeSubscriptionPlan(patch.subscriptionPlan);
+    const nextStatus = normalizeSubscriptionStatus(patch.subscriptionStatus);
+    const nextRenewalDate = patch.renewalDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+
+    await setDoc(
+      userDoc(userId),
+      {
+        userId,
+        subscriptionPlan: nextPlan,
+        subscriptionStatus: nextStatus,
+        renewalDate: nextRenewalDate,
+        updatedAt: timestamp,
+      },
+      { merge: true },
+    );
   },
 
   async createBusinessSupportTicket(
@@ -1466,8 +1487,8 @@ export const dashboardService = {
           gstNumber: ownerProfile?.gstNumber?.trim() || '',
           teamSize: ownerProfile?.teamSize?.trim() || '',
           website: ownerProfile?.website?.trim() || '',
-          subscriptionPlan: 'freemium',
-          subscriptionStatus: 'active',
+          subscriptionPlan: normalizeSubscriptionPlan(ownerProfile?.subscriptionPlan),
+          subscriptionStatus: normalizeSubscriptionStatus(ownerProfile?.subscriptionStatus),
           renewalDate: ownerProfile?.renewalDate || '',
           sidebarViews: nextAllowedViews,
           workspaceOwnerId: userId,
